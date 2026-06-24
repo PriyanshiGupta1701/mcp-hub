@@ -1,11 +1,6 @@
 """
 GitHub NL Agent
 Lets a person drive real GitHub operations with plain-English instructions.
-
-Key change: resolves the authenticated GitHub username from the PAT token
-once at startup (via GET /user), then injects it into every Gemini system
-prompt so "my repos", "my PRs", "I own" etc. always resolve to the correct
-user — never a guessed or hallucinated one.
 """
 
 import asyncio
@@ -29,187 +24,77 @@ WORKER_STARTUP_TIMEOUT = 30
 
 def _enrich_instruction(instruction: str, github_username: str) -> str:
     """
-    Rewrite the user's instruction so that self-referential phrases like
-    "my repos", "my PRs", "I created", etc. are replaced with the actual
-    GitHub username — so Gemini can pass it directly as a tool argument.
-
-    System-prompt hints alone are not enough: MCP tool schemas have required
-    parameters (username, owner, query) that Gemini treats as missing unless
-    the value appears explicitly in the conversation text.
+    Append the authenticated username as explicit context on EVERY call,
+    unconditionally — no self-reference detection, no regex heuristics that
+    can produce false positives/negatives (e.g. "of repo" previously
+    matching a "names another owner" pattern and suppressing injection
+    entirely). The model is told plainly: explicit owner in the instruction
+    wins; otherwise assume this user. This removes the failure mode where
+    no owner was ever injected and Gemini silently guessed one.
     """
-    import re
-
-    # Already has an explicit user: qualifier — leave untouched.
-    if re.search(r"\buser:[A-Za-z0-9_-]+\b", instruction):
-        return instruction
-
-    enriched = instruction
-
-    # Multi-word self-referential phrases (must run before single-word ones)
-    multi_word = [
-        (r"\bowned by me\b",   f"owned by {github_username}"),
-        (r"\bcreated by me\b", f"created by {github_username}"),
-        (r"\bfor me\b",        f"for {github_username}"),
-        (r"\bI own\b",         f"{github_username} owns"),
-        (r"\bI created\b",     f"{github_username} created"),
-        (r"\blist me\b",       f"list {github_username}"),
-    ]
-    for pattern, replacement in multi_word:
-        enriched = re.sub(pattern, replacement, enriched, flags=re.IGNORECASE)
-
-    # Single-word: "my" / "mine"
-    enriched = re.sub(r"\bmy\b",   github_username + "'s", enriched, flags=re.IGNORECASE)
-    enriched = re.sub(r"\bmine\b", github_username + "'s", enriched, flags=re.IGNORECASE)
-
-    # Standalone "I" as subject before a verb ("what did I create", "issues I opened")
-    enriched = re.sub(r"\bI\b(?=\s+[a-z])", github_username, enriched)
-
-    # If nothing matched, the instruction is about a GitHub resource, and no
-    # other username is already named ("for torvalds", "by octocat" etc.),
-    # append an explicit context note so Gemini still has the username.
-    repo_keywords   = ("repo", "repositories", "pull request", "pr", "issue", "commit", "branch")
-    has_self_ref    = enriched != instruction
-    has_repo_kw     = any(k in instruction.lower() for k in repo_keywords)
-    already_named   = github_username in instruction
-    names_another   = bool(re.search(r"\b(for|by|of|from)\s+[A-Za-z0-9_-]{2,}\b", instruction, re.IGNORECASE))
-
-    if not has_self_ref and has_repo_kw and not already_named and not names_another:
-        enriched = f"{instruction} (GitHub user: {github_username})"
-
-    return enriched
+    return (
+        f"{instruction}\n\n"
+        f"[Context: the authenticated GitHub user making this request is "
+        f"'{github_username}'. If no repository owner is explicitly stated "
+        f"above, assume the repository belongs to '{github_username}'. If "
+        f"an owner IS explicitly stated (e.g. 'someuser/some-repo', 'in "
+        f"octocat's repo', 'for the acme org'), use that owner instead — "
+        f"do not override an explicitly named owner.]"
+    )
 
 
-# def _build_system_prompt(github_username: str) -> str:
-#     """
-#     Inject the authenticated user's GitHub login and tool-use rules into
-#     the system prompt so Gemini picks the right tool every time.
-#     """
-#     return (
-#         f"You are a precise, reliable GitHub assistant with access to a suite of "
-#         f"GitHub tools. Your job is to carry out the user's instruction correctly "
-#         f"and efficiently using those tools.\n\n"
+def _build_system_prompt(github_username: str, tool_directory: str) -> str:
+    """
+    Inject the authenticated user's GitHub login, an explicit owner-
+    resolution rule, and the tool directory into the system prompt.
+    """
+    return f"""You are a precise GitHub assistant.
 
-#         f"## Authenticated User\n"
-#         f"The person you are helping is authenticated as GitHub user: **{github_username}**\n"
-#         f"Any time the user says 'me', 'my', 'I', 'mine', or 'my account', "
-#         f"resolve that to '{github_username}'. Never substitute a different username.\n\n"
+Authenticated GitHub user: {github_username}
 
-#         f"## How to select the right tool\n"
-#         f"Before calling any tool, ask yourself: what is the core action this instruction "
-#         f"is asking for — read, create, update, delete, or something else? "
-#         f"Then scan the available tools and pick the one whose name and description "
-#         f"most precisely matches that action and the resource it targets "
-#         f"(repository, issue, pull request, branch, file, comment, etc.). "
-#         f"If multiple tools seem relevant, prefer the one that is most specific "
-#         f"to the exact operation. If no tool fits, say so — do not approximate "
-#         f"with an unrelated tool.\n\n"
+## Owner resolution — follow exactly, every time, no exceptions
+Every GitHub tool call needs a repository "owner" (a username or org name).
 
-#         f"## Step-by-step execution\n"
-#         f"- Call one tool at a time. Wait for the result before deciding the next step.\n"
-#         f"- Use read tools first if you need context before acting "
-#         f"(e.g. confirm something exists before modifying it).\n"
-#         f"- Do not repeat a tool call with the same arguments. If a call returned "
-#         f"an error or empty result, stop and explain — do not retry blindly.\n"
-#         f"- Once the task is complete, respond with a short, clear plain-English "
-#         f"summary of what was done. Do not call any more tools at that point.\n\n"
+1. If the instruction explicitly names a different owner
+   (e.g. "octocat/Hello-World", "in the acme org's repo", "for user torvalds"),
+   use that owner.
+2. Otherwise — including when a repo is mentioned with NO owner at all,
+   like "repo mcp-hub" or "the billing-service repo" — the owner is
+   "{github_username}". This applies whether or not the instruction uses
+   self-referential words like "my" or "I".
+3. NEVER invent, guess, or default to any other username. If you cannot
+   resolve the owner using rules 1-2, stop and ask the user instead of
+   calling a tool with a guessed owner.
 
-#         f"## When you are unsure\n"
-#         f"If the instruction is ambiguous, or you cannot find a tool that fits, "
-#         f"stop and ask the user a single clarifying question rather than guessing."
-#     )
-
-
-def _build_system_prompt(
-    github_username: str,
-    tool_directory: str
-):
-
-    return f"""
-You are a precise GitHub assistant.
-
-Authenticated GitHub user:
-{github_username}
-
-Identity Rules:
-- "my"
-- "me"
-- "mine"
-- "I"
-
-always mean:
-{github_username}
-
-Never invent usernames.
-
-Available MCP tools:
-
+## Available MCP tools
 {tool_directory}
 
-Tool Selection Rules:
+## Tool selection rules
+1. Read the tool directory above.
+2. Choose ONE tool at a time; wait for its result before the next step.
+3. Prefer the most specific tool that matches the action and resource.
+4. Never fabricate a parameter value (owner, repo, PR number, etc.) — if a
+   required value is missing and cannot be resolved by the owner-resolution
+   rule above, ask the user instead of guessing.
+5. Do not repeat a tool call with identical arguments. If a call errors or
+   returns nothing useful, stop and explain — do not retry blindly.
 
-1. Read the tool directory.
-
-2. Choose ONE tool at a time.
-
-3. Prefer the most specific tool.
-
-Examples:
-
-list repos
-→ list_repositories
-
-review PR
-→ get_pull_request
-
-create issue
-→ create_issue
-
-4. Never guess parameters.
-
-5. If a tool doesn't fit:
-ask for clarification.
-
-Execution Rules:
-
-- Read first
-- Then act
-- Stop after completion
+## Execution
+- Read first, then act.
+- Once the task is complete, give a short plain-English summary and stop.
 """
 
 
 def _build_tool_directory(mcp_tools) -> str:
-    """
-    Convert MCP tools into a compact directory that Gemini
-    can read before choosing tools.
-    """
-
+    """Convert MCP tools into a compact directory Gemini reads before choosing tools."""
     lines = []
-
     for t in sorted(mcp_tools, key=lambda x: x.name):
-
         desc = (t.description or "").strip()
-
         if len(desc) > 180:
             desc = desc[:180] + "..."
-
-        read_only = (
-            getattr(
-                getattr(t, "annotations", None),
-                "readOnlyHint",
-                None
-            )
-        )
-
-        mode = (
-            "READ"
-            if read_only
-            else "WRITE"
-        )
-
-        lines.append(
-            f"- {t.name} [{mode}] → {desc}"
-        )
-
+        read_only = getattr(getattr(t, "annotations", None), "readOnlyHint", None)
+        mode = "READ" if read_only else "WRITE"
+        lines.append(f"- {t.name} [{mode}] → {desc}")
     return "\n".join(lines)
 
 
@@ -221,10 +106,7 @@ def _is_read_only(tool) -> bool:
 
 
 async def _resolve_github_username(token: str) -> str:
-    """
-    Call GET /user with the PAT to get the real authenticated GitHub login.
-    Falls back to 'unknown' if the token is invalid or the request fails.
-    """
+    """Call GET /user with the PAT to get the real authenticated GitHub login."""
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(
@@ -251,12 +133,11 @@ class _AgentSession:
     call_queue: "asyncio.Queue"
     gemini_tool: types.Tool
     history: list
-    system_prompt: str          # per-session, contains the resolved username
+    system_prompt: str
     pending_call: Optional[types.FunctionCall] = None
     pending_response_content: Optional[types.Content] = None
     created_at: float = field(default_factory=time.time)
     steps_taken: int = 0
-    # Loop detection: tracks (tool_name, frozen_args) → call count
     tool_call_counts: dict = field(default_factory=dict)
 
 
@@ -280,21 +161,13 @@ class GitHubNLAgent:
         self._github_toolsets = github_toolsets
         self._sessions: dict[str, _AgentSession] = {}
         self._tool_lookup: dict[str, dict] = {}
-        self._github_username: str = "unknown"   # resolved in initialize()
-
-    # ── Startup ──────────────────────────────────────────────────────────
+        self._github_username: str = "unknown"
 
     async def initialize(self) -> None:
-        """
-        Resolve the authenticated GitHub username from the PAT token.
-        Call this once in the FastAPI lifespan (alongside github_mcp_adapter.start()).
-        """
+        """Resolve the authenticated GitHub username from the PAT token. Call once at app startup."""
         self._github_username = await _resolve_github_username(self._github_token)
 
-    # ── Public API ───────────────────────────────────────────────────────
-
     async def run(self, instruction: str, meta: dict | None = None) -> dict:
-        # Lazy resolve if initialize() was skipped (e.g. in tests)
         if self._github_username == "unknown":
             self._github_username = await _resolve_github_username(self._github_token)
 
@@ -302,9 +175,7 @@ class GitHubNLAgent:
         call_queue: asyncio.Queue = asyncio.Queue()
         ready: asyncio.Future = asyncio.get_running_loop().create_future()
 
-        worker_task = asyncio.create_task(
-            self._session_worker(session_id, call_queue, ready)
-        )
+        worker_task = asyncio.create_task(self._session_worker(session_id, call_queue, ready))
 
         try:
             tools = await asyncio.wait_for(ready, timeout=WORKER_STARTUP_TIMEOUT)
@@ -312,31 +183,13 @@ class GitHubNLAgent:
             worker_task.cancel()
             raise RuntimeError(f"Failed to start GitHub MCP connection: {e}") from e
 
-        tool_directory = (
-            _build_tool_directory(
-                tools
-            )
-        )
+        tool_directory = _build_tool_directory(tools)
+        system_prompt = _build_system_prompt(self._github_username, tool_directory)
+        gemini_tool = self._build_gemini_tool(session_id, tools)
 
-        system_prompt = (
-            _build_system_prompt(
-                self._github_username,
-                tool_directory
-            )
-        )
-
-        gemini_tool = (
-            self._build_gemini_tool(
-                session_id,
-                tools
-            )
-        )
-
-        # Rewrite the instruction to embed the username directly so Gemini
-        # passes it as a tool argument rather than asking the user for it.
-        # The system prompt alone is not enough — MCP tool schemas have
-        # required parameters (e.g. `username`, `query`) that Gemini treats
-        # as missing unless they appear explicitly in the conversation.
+        # Always inject the username — unconditionally, every call. See
+        # module docstring for why the old self-reference-detection approach
+        # was unsafe.
         enriched_instruction = _enrich_instruction(instruction, self._github_username)
         history = [types.Content(role="user", parts=[types.Part(text=enriched_instruction)])]
 
@@ -352,8 +205,6 @@ class GitHubNLAgent:
         print(f"\n🤖 GitHub NL Agent started (session: {session_id})")
         print(f"   User: {self._github_username}")
         print(f"   Instruction: {instruction}")
-        if enriched_instruction != instruction:
-            print(f"   Enriched: {enriched_instruction}")
 
         return await self._advance(session_id)
 
@@ -404,11 +255,7 @@ class GitHubNLAgent:
             await self._cleanup(sid)
         return len(expired)
 
-    # ── Session worker ────────────────────────────────────────────────────
-
-    async def _session_worker(
-        self, session_id: str, call_queue: asyncio.Queue, ready: asyncio.Future
-    ) -> None:
+    async def _session_worker(self, session_id: str, call_queue: asyncio.Queue, ready: asyncio.Future) -> None:
         try:
             async with stdio_client(self._server_params()) as (read, write):
                 async with ClientSession(read, write) as mcp_session:
@@ -448,8 +295,6 @@ class GitHubNLAgent:
         await session.call_queue.put((tool_name, tool_args, future))
         return self._tool_result_to_dict(await future)
 
-    # ── Advance loop ──────────────────────────────────────────────────────
-
     async def _advance(self, session_id: str) -> dict:
         session = self._sessions[session_id]
 
@@ -463,7 +308,7 @@ class GitHubNLAgent:
             model=self.MODEL,
             contents=session.history,
             config=types.GenerateContentConfig(
-                system_instruction=session.system_prompt,   # contains resolved username
+                system_instruction=session.system_prompt,
                 tools=[session.gemini_tool],
             ),
         )
@@ -486,11 +331,11 @@ class GitHubNLAgent:
         tool = self._tool_lookup.get(session_id, {}).get(call.name)
 
         if tool is not None and _is_read_only(tool):
-            # Loop detection: abort if the same tool+args has been called before
             call_key = (call.name, str(sorted((call.args or {}).items())))
             session.tool_call_counts[call_key] = session.tool_call_counts.get(call_key, 0) + 1
             if session.tool_call_counts[call_key] > 1:
-                print(f"   🔁 Loop detected: {call.name} called with identical args {session.tool_call_counts[call_key]}x — stopping")
+                print(f"   🔁 Loop detected: {call.name} called with identical args "
+                      f"{session.tool_call_counts[call_key]}x — stopping")
                 loop_msg = (
                     f"I tried calling {call.name} multiple times with the same arguments and "
                     f"got the same result. I cannot complete the task this way. "
@@ -514,7 +359,6 @@ class GitHubNLAgent:
             ))
             return await self._advance(session_id)
 
-        # Write action — pause for human confirmation
         session.pending_call = call
         session.pending_response_content = response.candidates[0].content
         print(f"   ⏸  Awaiting confirmation: {call.name}({call.args})")
@@ -525,8 +369,6 @@ class GitHubNLAgent:
             "github_user": self._github_username,
             "proposed_action": {"tool": call.name, "args": call.args},
         }
-
-    # ── Helpers ───────────────────────────────────────────────────────────
 
     def _server_params(self) -> StdioServerParameters:
         if self._mcp_transport == "binary":
