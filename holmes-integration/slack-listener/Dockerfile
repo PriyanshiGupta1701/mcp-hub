@@ -1,0 +1,5 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY listener.py .
+RUN pip install --no-cache-dir slack_bolt requests
+CMD ["python", "listener.py"]
