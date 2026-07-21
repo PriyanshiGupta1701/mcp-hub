@@ -1,0 +1,163 @@
+services:
+  github-mcp:
+    image: me-west1-docker.pkg.dev/robusta-development/development/github-mcp:1.0.0
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN:-}
+    ports:
+      - "8000:8000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  grafana-mcp:
+    image: grafana/mcp-grafana:latest
+    ports:
+      - "9005:8000"
+    environment:
+      - GRAFANA_URL=${GRAFANA_URL:-}
+      - GRAFANA_SERVICE_ACCOUNT_TOKEN=${GRAFANA_TOKEN:-}
+      - GRAFANA_ORG_ID=${GRAFANA_ORG_ID:-1}
+    restart: unless-stopped
+  
+  jira-mcp:
+    image: ghcr.io/sooperset/mcp-atlassian:latest
+    environment:
+      - JIRA_URL=${JIRA_URL:-}
+      - JIRA_USERNAME=${JIRA_USERNAME:-}
+      - JIRA_API_TOKEN=${JIRA_API_KEY:-}
+      - TRANSPORT=sse
+      - PORT=9000
+    ports:
+      - "9001:9000"
+    restart: unless-stopped
+
+  slack-mcp:
+    image: ghcr.io/korotovsky/slack-mcp-server:latest
+    ports:
+      - "8001:13080"
+    environment:
+      # Choose ONE auth method:
+      - SLACK_MCP_XOXB_TOKEN=${SLACK_TOKEN:-}
+      # OR for stealth mode (no scopes needed, full features):
+      # - SLACK_MCP_XOXC_TOKEN=${SLACK_XOXC_TOKEN:-}
+      # - SLACK_MCP_XOXD_TOKEN=${SLACK_XOXD_TOKEN:-}
+
+      - SLACK_MCP_PORT=13080
+      - SLACK_MCP_HOST=0.0.0.0
+      - SLACK_MCP_ADD_MESSAGE_TOOL=true   # or restrict: "C0123ABCD,C0456EFGH"
+      #- SLACK_MCP_SSE_API_KEY=${SLACK_MCP_API_KEY:-}  # optional bearer auth for the SSE endpoint
+    restart: unless-stopped
+
+  slack-listener:
+    build: ./slack-listener
+    environment:
+      - SLACK_TOKEN=${SLACK_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - HOLMES_URL=http://holmes:5050/api/chat
+    depends_on:
+      holmes:
+        condition: service_healthy
+    restart: unless-stopped
+  
+  k8s-remediation-mcp:
+    image: us-central1-docker.pkg.dev/genuine-flight-317411/mcp/kubernetes-remediation-mcp:1.0.0
+    ports:
+      - "9002:8000"
+    environment:
+      - KUBECTL_ALLOWED_COMMANDS=create,edit,patch,delete,scale,rollout,cordon,uncordon,drain,taint,label,annotate,apply,run
+      - KUBECTL_TIMEOUT=60
+    volumes:
+      - ~/.kube/config:/root/.kube/config:ro
+    restart: unless-stopped
+
+  watcher:
+    build: ./watcher
+    environment:
+      - HOLMES_URL=http://holmes:5050/api/chat
+      - HOLMES_TIMEOUT_SEC=1200
+      - SLACK_TOKEN=${SLACK_TOKEN:-}
+      - SLACK_CHANNEL=${SLACK_ALERT_CHANNEL:-${SLACK_CHANNEL:-}}
+      - POLL_INTERVAL_SEC=1200
+      - CHECK_WINDOW_MINUTES=15
+      - AZURE_APP_SERVICE=${AZURE_APP_SERVICE:-jaano-new}
+      - AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-appsvc_linux_centralindia}
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      - HTTP_5XX_THRESHOLD=1
+      - FIX_MODEL=${FIX_MODEL:-gemini/gemini-2.5-flash}
+      - GITHUB_REPO=${GITHUB_REPO:-}
+      - KUBECONFIG=/root/.kube/config
+      - K8S_NAMESPACE=${K8S_NAMESPACE:-mcp-hub-test}
+      - K8S_DEPLOYMENT=${K8S_DEPLOYMENT:-}
+      - K8S_RESTART_THRESHOLD=${K8S_RESTART_THRESHOLD:-3}
+      - K8S_LOG_WINDOW_MINUTES=${K8S_LOG_WINDOW_MINUTES:-20}
+    volumes:
+      - ~/.kube/config:/root/.kube/config:ro
+      - ./watcher-data:/data
+    depends_on:
+      holmes:
+        condition: service_healthy
+    restart: unless-stopped
+
+  holmes:
+    build: ./holmes-custom
+    ports:
+      - "127.0.0.1:5050:5050"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - JIRA_URL=${JIRA_URL:-}
+      - JIRA_USERNAME=${JIRA_USERNAME:-}
+      - JIRA_API_KEY=${JIRA_API_KEY:-}
+      - SLACK_TOKEN=${SLACK_TOKEN:-}       
+      - SLACK_CHANNEL=${SLACK_CHANNEL:-}
+      - TOOL_SCHEMA_NO_PARAM_OBJECT_IF_NO_PARAMS=true
+      #- MODEL=gemini/gemini-2.5-flash
+      #- MODEL=ollama_chat/qwen2.5-coder:latest
+      #- OLLAMA_API_BASE=http://host.docker.internal:11434
+      # - OPENAI_API_BASE=http://host.docker.internal:11434/v1
+      # - OPENAI_API_KEY=dummy
+      - ROBUSTA_AI=false
+      # - SSE_READ_TIMEOUT=100
+      #- HOLMES_TIMEOUT=1000
+      - OVERRIDE_MAX_CONTENT_SIZE=128000
+      - OVERRIDE_MAX_OUTPUT_TOKEN=32000
+      # - SETUP_TIMEOUT=600
+      - TOOLSET_STATUS_REFRESH_INTERVAL_SECONDS=3600
+      - HOLMES_TIMEOUT=1200
+      - SSE_READ_TIMEOUT=1200
+      - LLM_REQUEST_TIMEOUT=1200
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID:-}
+      - GRAFANA_URL=${GRAFANA_URL:-}
+      - GRAFANA_TOKEN=${GRAFANA_TOKEN:-}
+      - LITELLM_TEMPERATURE=1.0
+      - LITELLM_NUM_RETRIES=3
+      - LITELLM_RETRY_STRATEGY=exponential_backoff_retry
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.holmes:/root/.holmes
+      - ~/.kube/config:/tmp/.kube/config:ro
+      - ~/.aws:/root/.aws:ro
+      - ~/.config/gcloud:/root/.config/gcloud:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./holmes-custom/server.py:/app/server.py:ro
+      - ./holmes-custom/llm.py:/app/holmes/core/llm.py:ro
+      - ./holmes-custom/tool_calling_llm.py:/app/holmes/core/tool_calling_llm.py:ro
+
+    entrypoint: ["/start.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 100s
