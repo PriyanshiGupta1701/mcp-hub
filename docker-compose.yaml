@@ -1,4 +1,26 @@
 services:
+  sonarqube:
+    image: sonarqube:community
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true  # local/dev only
+    restart: unless-stopped
+
+  sonarqube-mcp:
+    image: sonarsource/sonarqube-mcp:latest
+    environment:
+      - SONARQUBE_TRANSPORT=http
+      - SONARQUBE_HTTP_HOST=0.0.0.0
+      - SONARQUBE_URL=${SONARQUBE_URL:-http://sonarqube:9000}
+      - SONARQUBE_TOOLSETS=analysis,issues,quality-gates
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
+    depends_on:
+      - sonarqube
+    ports:
+      - "127.0.0.1:9012:8080"   # optional — only for testing from your host
+    restart: unless-stopped
+
   github-mcp:
     image: me-west1-docker.pkg.dev/robusta-development/development/github-mcp:1.0.0
     environment:
@@ -96,6 +118,12 @@ services:
       - K8S_DEPLOYMENT=${K8S_DEPLOYMENT:-}
       - K8S_RESTART_THRESHOLD=${K8S_RESTART_THRESHOLD:-3}
       - K8S_LOG_WINDOW_MINUTES=${K8S_LOG_WINDOW_MINUTES:-20}
+      - SONARQUBE_ENABLED=${SONARQUBE_ENABLED:-true}
+      - SONARQUBE_URL=${SONARQUBE_URL:-http://sonarqube:9000}
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
+      - SONARQUBE_PROJECT_KEY=${SONARQUBE_PROJECT_KEY:-mcp-hub-test}
+      - SONARQUBE_SEVERITIES=${SONARQUBE_SEVERITIES:-BLOCKER,CRITICAL}
+      - GIT_CLONE_DIR=/data/repo-clone
     volumes:
       - ~/.kube/config:/root/.kube/config:ro
       - ./watcher-data:/data
@@ -142,6 +170,7 @@ services:
       - LITELLM_TEMPERATURE=1.0
       - LITELLM_NUM_RETRIES=3
       - LITELLM_RETRY_STRATEGY=exponential_backoff_retry
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
