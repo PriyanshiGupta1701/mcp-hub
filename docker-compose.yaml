@@ -1,24 +1,26 @@
 services:
-  sonarqube:
-    image: sonarqube:community
-    ports:
-      - "127.0.0.1:9000:9000"
-    environment:
-      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true  # local/dev only
-    restart: unless-stopped
+  # sonarqube:
+  #   image: sonarqube:community
+  #   ports:
+  #     - "127.0.0.1:9000:9000"
+  #   environment:
+  #     - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+  #   volumes:
+  #     - sonarqube_data:/opt/sonarqube/data
+  #     - sonarqube_extensions:/opt/sonarqube/extensions
+  #     - sonarqube_logs:/opt/sonarqube/logs
+  #   restart: unless-stopped
 
   sonarqube-mcp:
     image: sonarsource/sonarqube-mcp:latest
     environment:
+      - SONARQUBE_ORG=${SONARQUBE_ORG:-}
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
+      - SONARQUBE_TOOLSETS=analysis,issues,quality-gates
       - SONARQUBE_TRANSPORT=http
       - SONARQUBE_HTTP_HOST=0.0.0.0
-      - SONARQUBE_URL=${SONARQUBE_URL:-http://sonarqube:9000}
-      - SONARQUBE_TOOLSETS=analysis,issues,quality-gates
-      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
-    depends_on:
-      - sonarqube
     ports:
-      - "127.0.0.1:9012:8080"   # optional — only for testing from your host
+      - "127.0.0.1:9012:8080"
     restart: unless-stopped
 
   github-mcp:
@@ -119,7 +121,8 @@ services:
       - K8S_RESTART_THRESHOLD=${K8S_RESTART_THRESHOLD:-3}
       - K8S_LOG_WINDOW_MINUTES=${K8S_LOG_WINDOW_MINUTES:-20}
       - SONARQUBE_ENABLED=${SONARQUBE_ENABLED:-true}
-      - SONARQUBE_URL=${SONARQUBE_URL:-http://sonarqube:9000}
+      - SONARQUBE_URL=${SONARQUBE_URL:-https://sonarcloud.io}
+      - SONARQUBE_ORG=${SONARQUBE_ORG:-}
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
       - SONARQUBE_PROJECT_KEY=${SONARQUBE_PROJECT_KEY:-mcp-hub-test}
       - SONARQUBE_SEVERITIES=${SONARQUBE_SEVERITIES:-BLOCKER,CRITICAL}
@@ -146,7 +149,7 @@ services:
       - SLACK_TOKEN=${SLACK_TOKEN:-}       
       - SLACK_CHANNEL=${SLACK_CHANNEL:-}
       - TOOL_SCHEMA_NO_PARAM_OBJECT_IF_NO_PARAMS=true
-      #- MODEL=gemini/gemini-2.5-flash
+      - MODEL=openrouter/z-ai/glm-4.5-air
       #- MODEL=ollama_chat/qwen2.5-coder:latest
       #- OLLAMA_API_BASE=http://host.docker.internal:11434
       # - OPENAI_API_BASE=http://host.docker.internal:11434/v1
@@ -155,7 +158,7 @@ services:
       # - SSE_READ_TIMEOUT=100
       #- HOLMES_TIMEOUT=1000
       - OVERRIDE_MAX_CONTENT_SIZE=128000
-      - OVERRIDE_MAX_OUTPUT_TOKEN=32000
+      - OVERRIDE_MAX_OUTPUT_TOKEN=10000
       # - SETUP_TIMEOUT=600
       - TOOLSET_STATUS_REFRESH_INTERVAL_SECONDS=3600
       - HOLMES_TIMEOUT=1200
@@ -171,6 +174,7 @@ services:
       - LITELLM_NUM_RETRIES=3
       - LITELLM_RETRY_STRATEGY=exponential_backoff_retry
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -190,3 +194,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 100s
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
