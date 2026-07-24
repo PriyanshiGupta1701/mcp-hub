@@ -13,7 +13,7 @@ import time
 import requests
 
 from .config import (
-    GITHUB_REPO, SONARQUBE_ENABLED, SONARQUBE_URL, SONARQUBE_TOKEN,
+    GITHUB_REPO, SONARQUBE_ENABLED, SONARQUBE_URL, SONARQUBE_ORG, SONARQUBE_TOKEN,
     SONARQUBE_PROJECT_KEY, SONARQUBE_SEVERITIES, SONARQUBE_MAX_ISSUES,
     GIT_CLONE_DIR, GIT_DEFAULT_BRANCH,
 )
@@ -101,9 +101,6 @@ def clone_or_update_repo(branch):
 
 
 def run_sonar_scan():
-    """Runs sonar-scanner against the local clone. Returns True if the
-    scanner itself completed successfully (not the same as a passing
-    quality gate — issues are checked separately via the Web API)."""
     args = [
         "sonar-scanner",
         f"-Dsonar.projectKey={SONARQUBE_PROJECT_KEY}",
@@ -111,6 +108,8 @@ def run_sonar_scan():
         f"-Dsonar.host.url={SONARQUBE_URL}",
         f"-Dsonar.token={SONARQUBE_TOKEN}",
     ]
+    if SONARQUBE_ORG:
+        args.append(f"-Dsonar.organization={SONARQUBE_ORG}")
     try:
         result = subprocess.run(args, cwd=GIT_CLONE_DIR, capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
@@ -163,8 +162,6 @@ def wait_for_ce_task(timeout_sec=180):
 
 
 def get_sonarqube_issues():
-    """Fetches open issues for the project, filtered to the configured
-    severities. Returns a list of dicts with file/line/rule/message."""
     severities = SONARQUBE_SEVERITIES
     url = f"{SONARQUBE_URL}/api/issues/search"
     params = {
@@ -173,6 +170,8 @@ def get_sonarqube_issues():
         "severities": severities,
         "ps": min(SONARQUBE_MAX_ISSUES, 100),
     }
+    if SONARQUBE_ORG:
+        params["organization"] = SONARQUBE_ORG
     try:
         resp = requests.get(url, params=params, auth=(SONARQUBE_TOKEN, ""), timeout=30)
         resp.raise_for_status()
