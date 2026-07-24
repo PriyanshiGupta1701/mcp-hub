@@ -43,12 +43,13 @@ LOG_ERROR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# ── New config (add near the K8S_* config block) ──────────────────────────
 SONARQUBE_ENABLED = os.environ.get("SONARQUBE_ENABLED", "true").lower() == "true"
 SONARQUBE_URL = os.environ.get("SONARQUBE_URL", "http://sonarqube:9000")
+SONARQUBE_ORG = os.environ.get("SONARQUBE_ORG", "")   # <-- new: required for SonarCloud
 SONARQUBE_TOKEN = os.environ.get("SONARQUBE_TOKEN", "")
 SONARQUBE_PROJECT_KEY = os.environ.get("SONARQUBE_PROJECT_KEY", "")
 SONARQUBE_SEVERITIES = os.environ.get("SONARQUBE_SEVERITIES", "BLOCKER,CRITICAL")
+SONARQUBE_MAX_ISSUES = int(os.environ.get("SONARQUBE_MAX_ISSUES", "20"))# blank = auto-detect via GitHub API
 SONARQUBE_MAX_ISSUES = int(os.environ.get("SONARQUBE_MAX_ISSUES", "20"))
-GIT_CLONE_DIR = os.environ.get("GIT_CLONE_DIR", "/data/repo-clone")
+GIT_CLONE_DIR = os.environ.get("GIT_CLONE_DIR", "backend\\watcher-data\\data\\repo-clone")
 GIT_DEFAULT_BRANCH = os.environ.get("GIT_DEFAULT_BRANCH", "")  # blank = auto-detect via GitHub API
