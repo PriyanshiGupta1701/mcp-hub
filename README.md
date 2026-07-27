@@ -159,16 +159,24 @@ Either way, wait for the next `watcher` poll cycle (or `docker compose restart w
 
 ## Current status / known limitations
 
-| Item | Status |
-|---|---|
-| Azure monitoring + auto-fix PR | ✅ Working |
-| Kubernetes monitoring + auto-fix PR | ✅ Working |
-| Security (Dependabot) monitoring | ✅ Working |
-| Slack chat (`@mention`) | ✅ Working |
-| Frontend + control-plane credential management | ✅ Working |
-| Grafana MCP | ⚠️ 403 auth — needs a fresh service account token |
-| k8s-remediation MCP | ⚠️ 404 — SSE path mismatch, unused (superseded by `watcher`'s own kubectl checks) |
-| Fix/PR step on `gemini-3.1-flash-lite` | ⚠️ Occasionally returns an empty response on complex prompts — mitigated by splitting investigate/execute into two smaller calls, not fully eliminated |
+| Category | Item | Status |
+|---|---|---|
+| **Monitoring pipelines** | Azure App Service monitoring + auto-fix PR | ✅ Working |
+| | Kubernetes monitoring + auto-fix PR | ✅ Working |
+| | SonarQube commit-triggered scan + auto-fix PR | ✅ Working |
+| | Security (Dependabot) monitoring | ✅ Working |
+| | AWS monitoring + auto-fix PR | ❌ Not implemented — design discussed, no code yet |
+| **MCP toolsets** | `github` (SSE) | ✅ Working |
+| | `slack` (SSE) | ✅ Working |
+| | `jira` (SSE) | ✅ Working |
+| | `azure_api` (stdio) | ✅ Working |
+| | `sonarqube` (streamable-http) | ✅ Working |
+| | `grafana` (SSE) | ✅ Working |
+| | `k8s-remediation` (SSE) | ✅ Working |
+| | `kubernetes/core`, `kubernetes/logs` | ✅ Working |
+| | `kubernetes/kube-lineage-extras` | ✅ Working |
+| | `docker/core` | ✅ Working |
+| | `postgres` service | ✅ Working |
 
 ## How it stays cheap
 
