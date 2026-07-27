@@ -1,15 +1,20 @@
 services:
-  # sonarqube:
-  #   image: sonarqube:community
-  #   ports:
-  #     - "127.0.0.1:9000:9000"
-  #   environment:
-  #     - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
-  #   volumes:
-  #     - sonarqube_data:/opt/sonarqube/data
-  #     - sonarqube_extensions:/opt/sonarqube/extensions
-  #     - sonarqube_logs:/opt/sonarqube/logs
-  #   restart: unless-stopped
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=${POSTGRES_ADMIN_PASSWORD:?set in .env}
+      - POSTGRES_DB=mcp_hub
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mcp_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   sonarqube-mcp:
     image: sonarsource/sonarqube-mcp:latest
@@ -175,6 +180,7 @@ services:
       - LITELLM_RETRY_STRATEGY=exponential_backoff_retry
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - POSTGRES_URL=${POSTGRES_URL:-}
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -199,3 +205,4 @@ volumes:
   sonarqube_data:
   sonarqube_extensions:
   sonarqube_logs:
+  postgres_data:

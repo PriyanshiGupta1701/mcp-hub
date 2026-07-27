@@ -1,0 +1,132 @@
+# ~/.holmes/config.yaml
+
+# ── Model ────────────────────────────────────────────────────────────────
+model: "gemini/gemini-2.5-flash"
+api_key: "${GEMINI_API_KEY:-}"
+
+##model: "gpt-4.1"
+#api_key: "..."
+
+#model: "azure/model-deployment-name"
+#api_key: "..."
+
+# Fast Model Summarization
+# Optional fast model for summarizing large tool outputs before sending to main LLM
+# Helps reduce context window usage, improve performance, and reduce costs
+#fast_model: "gpt-4o-mini"
+
+# try adding your own tools here!
+# e.g. query company-specific data, fetch logs from your existing observability tools, etc
+#custom_toolsets: ["examples/custom_toolset.yaml"]
+
+# give the LLM explicit instructions how to investigate certain alerts
+# use custom_runbook_catalogs (catalog.json files with markdown runbook references)
+# the directory containing each catalog.json will be used as a search path for the markdown files
+#custom_runbook_catalogs: ["/path/to/your/custom/runbooks/catalog.json"]
+
+
+
+# ── GitHub (via official hosted MCP server — no Docker/k8s needed) ────────
+mcp_servers:
+
+  sonarqube:
+    description: "SonarQube code quality and security analysis"
+    config:
+      url: "http://sonarqube-mcp:8080/mcp"
+      mode: streamable-http
+      headers:
+        Authorization: "Bearer {{ env.SONARQUBE_TOKEN }}"
+    llm_instructions: |
+      Use SonarQube tools to look up rule descriptions, remediation
+      guidance, and related security hotspots when investigating a
+      SonarQube-reported issue before proposing a fix.
+      
+  azure_api:
+    description: "Azure API MCP Server"
+    config:
+      mode: stdio
+      command: "azure-api-mcp"
+      timeout: 1000
+    llm_instructions: |
+      After completing all tool calls, you MUST always write a final text summary
+      of what was accomplished or found. Never end without a summary response.
+  
+  grafana:
+    description: "Grafana observability and dashboards"
+    config:
+      url: "http://grafana-mcp:8000/sse"
+      mode: "sse"
+    llm_instructions: |
+      Use Grafana tools to query dashboards, Loki logs and Prometheus metrics.
+      For Azure App Service logs query Loki with appropriate label selectors.
+      Always provide a final text summary after completing all tool calls.
+
+  github:
+    description: "GitHub MCP Server - access repositories, pull requests, issues, and GitHub Actions"
+    config:
+      url: "http://github-mcp:8000/sse"
+      mode: "sse"
+      timeout: 1000
+      health_check_tool: null
+    llm_instructions: |
+      After completing all tool calls, you MUST always write a final text summary
+      of what was accomplished or found. Never end without a summary response.
+
+  slack:
+    description: "Slack MCP Server - post and read messages"
+    config:
+      url: "http://slack-mcp:13080/sse"
+      mode: "sse"
+      timeout: 1000
+    llm_instructions: |
+      After completing all tool calls, you MUST always write a final text summary
+      of what was accomplished or found. Never end without a summary response.
+
+  jira:
+    description: "Jira MCP Server - search, read, create, and update Jira issues"
+    config:
+      url: "http://jira-mcp:9000/sse"
+      mode: "sse"
+      timeout: 1000
+    llm_instructions: |
+      After completing all tool calls, you MUST always write a final text summary
+      of what was accomplished or found. Never end without a summary response.
+
+  k8s-remediation:
+    description: "Kubernetes Remediation MCP - create, scale, restart, patch Kubernetes resources"
+    config:
+      url: "http://k8s-remediation-mcp:8000/sse"
+      mode: "sse"
+      timeout: 1000
+    llm_instructions: |
+      After completing all tool calls, you MUST always write a final text summary
+      of what was accomplished or found. Never end without a summary response.  # seconds — Kubernetes can take a while for multi-tool queries
+
+toolsets:
+  prod-postgres:
+    type: database
+    config:
+      connection_url: "{{ env.POSTGRES_URL }}"
+      read_only: true
+    llm_instructions: |
+      Local PostgreSQL database (mcphub_test) with sample customers/orders tables,
+      used for testing Holmes's database investigation capabilities.
+  kubernetes/core:
+    enabled: true        # describe pods, nodes, deployments, events
+  kubernetes/logs:
+    enabled: true        # already working, explicit is fine
+  kubernetes/live-metrics:
+    enabled: true        # CPU/memory usage of pods and nodes
+  kubernetes/kube-lineage-extras:
+    enabled: true 
+  docker/core:
+    enabled: true
+    tags: ["core"]
+    config:
+      allowed_commands:
+        - "docker ps"
+        - "docker ps -q"
+        - "docker inspect"
+        - "docker logs"
+        - "docker stats --no-stream"
+        - "docker images"
