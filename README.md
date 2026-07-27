@@ -164,8 +164,7 @@ Either way, wait for the next `watcher` poll cycle (or `docker compose restart w
 | **Monitoring pipelines** | Azure App Service monitoring + auto-fix PR | ✅ Working |
 | | Kubernetes monitoring + auto-fix PR | ✅ Working |
 | | SonarQube commit-triggered scan + auto-fix PR | ✅ Working |
-| | Security (Dependabot) monitoring | ✅ Working |
-| | AWS monitoring + auto-fix PR | ✅ Working |
+| | AWS monitoring + auto-fix PR | Not configured yet |
 | **MCP toolsets** | `github` (SSE) | ✅ Working |
 | | `slack` (SSE) | ✅ Working |
 | | `jira` (SSE) | ✅ Working |
