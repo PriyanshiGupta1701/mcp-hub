@@ -1,0 +1,65 @@
+1. Create a new postgre server
+    
+    a. With the name "mcp-hub-docker"
+    b. In connections tab:
+        Host name: localhost
+        Port: 5432
+        Username: admin_username
+        Password: admin_password
+
+2. Create a DB in the new server named "mcp-hub"
+
+3. Run the following SQL commands to create sample tables in the DB:
+
+    CREATE TABLE customers (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE TABLE orders (
+        id SERIAL PRIMARY KEY,
+        customer_id INT REFERENCES customers(id),
+        amount NUMERIC(10,2) NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    INSERT INTO customers (name, email) VALUES
+        ('Alice Smith', 'alice@example.com'),
+        ('Bob Jones', 'bob@example.com'),
+        ('Carol White', 'carol@example.com');
+
+    INSERT INTO orders (customer_id, amount, status) VALUES
+        (1, 49.99, 'completed'),
+        (1, 12.50, 'pending'),
+        (2, 199.00, 'failed'),
+        (3, 5.25, 'completed');
+
+4. Now create a new role and user in the DB with read only access to the DB with the following commands:
+
+    CREATE USER holmes_readonly WITH PASSWORD 'mcp_hub_test';
+    GRANT CONNECT ON DATABASE mcp_hub TO holmes_readonly;
+    GRANT USAGE ON SCHEMA public TO holmes_readonly;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO holmes_readonly;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO holmes_readonly;
+
+5. Run this in terminal to get the subnet of the backend_default container:
+
+    docker network inspect backend_default
+
+
+6. Now move to your "C:\Program Files\PostgreSQL\18" directory and look for "pg_hba.conf" file and at its end in the subnet field add the below line to allow the docker to access this local port:
+
+    host    mcp_hub    holmes_readonly    <subnet of backend container>    scram-sha-256
+
+7. Paste this postgres url in the .env file:
+
+    POSTGRES_URL=postgresql://holmes_readonly:mcp_hub_test@host.docker.internal:5432/mcp_hub
+
+8. Rebuild the image
+
+
+
+
